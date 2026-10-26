@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>StudyScroll</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
+  <style>
+    body { background-color: #0b0e11; color: #d7dadc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .reddit-border { border-color: #272729; }
+    .reddit-bg { background-color: #15181c; }
+    .reddit-hover:hover { background-color: #1f2328; }
+    
+    .katex { 
+      font-size: 1.08em !important; 
+      color: #f3f4f6;
+      padding: 0 3px;
+    }
+    
+    .katex-display {
+      margin: 1.25rem 0 !important;
+      padding: 0.85rem 1rem !important;
+      background-color: #0b0e11 !important;
+      border: 1px solid #272729 !important;
+      border-radius: 0.5rem !important;
+      overflow-x: auto !important;
+    }
+
+    /* Estilo para los Spoilers estilo Reddit (>!texto!<) */
+    .reddit-spoiler {
+      background-color: #343536;
+      color: transparent;
+      border-radius: 4px;
+      padding: 2px 6px;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s ease;
+    }
+    .reddit-spoiler.revealed,
+    .reddit-spoiler:hover {
+      background-color: #272729;
+      color: #e5e7eb;
+      user-select: text;
+    }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0b0e11; }
+    ::-webkit-scrollbar-thumb { background: #343536; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center">
+
+  <!-- Header -->
+  <header class="w-full max-w-xl border-b reddit-border p-3 flex justify-between items-center sticky top-0 bg-[#0b0e11]/95 backdrop-blur z-20">
+    <div class="flex items-center gap-2">
+      <span class="text-[#ff4500] font-black text-lg tracking-tight">r/StudyScroll</span>
+      <select id="sessionSelect" onchange="switchSession(this.value)" class="bg-[#1f2328] text-xs font-semibold text-white px-2.5 py-1.5 rounded-full border reddit-border focus:outline-none max-w-[140px] truncate"></select>
+    </div>
+    <div class="flex items-center gap-1.5">
+      <button onclick="copyGeminiPrompt()" title="Copiar Prompt Gemini" class="flex items-center gap-1 bg-[#1f2328] hover:bg-[#272729] text-xs font-medium text-gray-200 px-2.5 py-1.5 rounded-full border reddit-border transition">
+        <i data-lucide="copy" class="w-3.5 h-3.5 text-orange-400"></i>
+        <span>Prompt</span>
+      </button>
+      <button onclick="openModal('newSessionModal')" class="bg-[#ff4500] hover:bg-[#e03d00] text-white text-xs font-semibold px-3 py-1.5 rounded-full transition">
+        + Sesión
+      </button>
+      <button onclick="openModal('syncModal')" title="Sincronizar Nube" class="p-1.5 text-gray-400 hover:text-white">
+        <i data-lucide="cloud" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- Contador -->
+  <div class="w-full max-w-xl px-4 py-2 flex items-center justify-between text-xs text-gray-400 border-b reddit-border bg-[#0b0e11]">
+    <span>Materia: <b id="activeSessionTitle" class="text-white">General</b></span>
+    <span>Pendientes: <span id="remainingCounter" class="text-[#ff4500] font-bold">0</span></span>
+  </div>
+
+  <!-- Feed -->
+  <main id="feed" class="w-full max-w-xl p-2 sm:p-4 space-y-3 pb-24"></main>
+
+  <div id="sentinel" class="w-full h-10"></div>
+
+  <!-- MODAL: Post Detallado -->
+  <div id="postModal" class="hidden fixed inset-0 bg-black/85 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 overflow-y-auto">
+    <div class="reddit-bg border reddit-border w-full max-w-xl rounded-t-2xl sm:rounded-xl max-h-[92vh] flex flex-col overflow-hidden shadow-2xl">
+      <div class="p-4 border-b reddit-border flex justify-between items-center sticky top-0 reddit-bg z-10">
+        <div class="text-xs text-[#818384] font-medium" id="modalSub"></div>
+        <button onclick="closeModal('postModal')" class="text-gray-400 hover:text-white text-xl font-bold p-1 leading-none">&times;</button>
+      </div>
+
+      <div class="p-5 overflow-y-auto space-y-5">
+        <h2 id="modalTitle" class="text-lg sm:text-xl font-bold text-white tracking-tight leading-snug"></h2>
+        
+        <!-- Contenedor opcional para Imagen -->
+        <div id="modalImageContainer" class="hidden my-3 rounded-lg overflow-hidden border reddit-border bg-[#0b0e11] text-center p-1">
+          <img id="modalImage" src="" alt="Gráfico conceptual" class="max-h-72 w-auto mx-auto object-contain rounded" onerror="this.parentElement.classList.add('hidden')">
+          <p id="modalImageCaption" class="text-[11px] text-gray-400 mt-1 italic"></p>
+        </div>
+
+        <!-- Cuerpo del post -->
+        <div id="modalBody" class="text-[15px] sm:text-base leading-relaxed text-gray-200 space-y-4"></div>
+
+        <!-- TL;DR -->
+        <div id="modalTLDR" class="border-l-4 border-[#ff4500] bg-[#0b0e11] p-3.5 rounded-r-lg text-xs sm:text-sm text-orange-200 leading-normal"></div>
+
+        <!-- Comentarios / Analogías -->
+        <div class="pt-4 border-t reddit-border">
+          <h3 class="text-xs font-bold text-[#818384] uppercase tracking-wider mb-3">Explicaciones & Analogías</h3>
+          <div id="modalComments" class="space-y-3.5"></div>
+        </div>
+      </div>
+
+      <div class="p-3.5 border-t reddit-border reddit-bg flex justify-between items-center">
+        <span class="text-xs text-gray-400 font-medium">¿Comprendes este tema?</span>
+        <button id="modalUpvoteBtn" class="flex items-center gap-1.5 bg-[#ff4500] hover:bg-[#e03d00] text-white text-xs font-bold px-4 py-2 rounded-full transition shadow-md">
+          <i data-lucide="arrow-big-up" class="w-4 h-4"></i>
+          <span>Entendido (Upvote)</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Nueva Sesión / Pegar JSON -->
+  <div id="newSessionModal" class="hidden fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+    <div class="reddit-bg border reddit-border rounded-xl max-w-md w-full p-5 space-y-4 shadow-xl">
+      <h3 class="font-bold text-white text-base">Crear / Importar Sesión</h3>
+      <input type="text" id="sessionNameInput" placeholder="Nombre (ej. Metalurgia y Ensayos)" class="w-full bg-[#0b0e11] p-2.5 text-sm rounded border reddit-border text-white focus:outline-none">
+      <textarea id="jsonInput" rows="8" placeholder="Pega el JSON de Gemini aquí directamente..." class="w-full bg-[#0b0e11] p-2.5 text-xs rounded border reddit-border text-white font-mono focus:outline-none leading-relaxed"></textarea>
+      <div class="flex justify-end gap-2 pt-1">
+        <button onclick="closeModal('newSessionModal')" class="px-3.5 py-1.5 text-xs text-gray-400 hover:text-white">Cancelar</button>
+        <button onclick="createSession()" class="px-4 py-1.5 text-xs bg-[#ff4500] hover:bg-[#e03d00] text-white font-semibold rounded transition">Guardar Sesión</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Sincronización Supabase -->
+  <div id="syncModal" class="hidden fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+    <div class="reddit-bg border reddit-border rounded-xl max-w-md w-full p-5 space-y-3.5 shadow-xl">
+      <h3 class="font-bold text-white text-base">Sincronización en la Nube</h3>
+      <p class="text-xs text-gray-400">Pega tus credenciales de Supabase para sincronizar con tu móvil.</p>
+      <input type="text" id="supabaseUrl" placeholder="https://xyz.supabase.co" class="w-full bg-[#0b0e11] p-2 text-xs rounded border reddit-border text-white">
+      <input type="password" id="supabaseKey" placeholder="Anon Public Key" class="w-full bg-[#0b0e11] p-2 text-xs rounded border reddit-border text-white">
+      <div class="flex justify-between items-center pt-2">
+        <button onclick="clearSyncConfig()" class="text-xs text-red-400 hover:underline">Desconectar</button>
+        <div class="flex gap-2">
+          <button onclick="closeModal('syncModal')" class="px-3 py-1.5 text-xs text-gray-400">Cerrar</button>
+          <button onclick="saveSyncConfig()" class="px-3.5 py-1.5 text-xs bg-[#ff4500] text-white font-semibold rounded">Conectar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let db = null;
+    let sessions = JSON.parse(localStorage.getItem('study_sessions')) || {};
+    let activeSessionId = localStorage.getItem('active_session_id') || Object.keys(sessions)[0] || "General";
+    let randomizedQueue = [];
+    let queuePointer = 0;
+
+    // FILTRO 1: Elimina [cite: 123] o cualquier referencia parecida
+    function cleanCitations(str) {
+      if (!str) return '';
+      return str.replace(/\[cite:\s*[\d,\s]+\]/gi, '').trim();
+    }
+
+    // FORMATEADOR: Elimina citas, formatea LaTeX, negritas, saltos y spoilers (>!texto!<)
+    function formatRichText(raw) {
+      if (!raw) return '';
+      let text = cleanCitations(raw);
+
+      // Convertir spoilers estilo Reddit: >!oculto!< -> elemento interactivo
+      text = text.replace(/>!(.*?)!</g, '<span class="reddit-spoiler" onclick="this.classList.toggle(\'revealed\')">$1</span>');
+
+      const paragraphs = text.split(/\n\s*\n/);
+      return paragraphs.map(p => {
+        p = p.trim();
+        if (!p) return '';
+        if (p.startsWith('$$') && p.endsWith('$$')) {
+          return `<div class="my-4">${p}</div>`;
+        }
+        let formatted = p.replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>');
+        formatted = formatted.replace(/\n/g, '<br/>');
+        return `<p class="leading-relaxed mb-3">${formatted}</p>`;
+      }).join('');
+    }
+
+    function renderLatex(container) {
+      if (window.renderMathInElement) {
+        renderMathInElement(container, {
+          delimiters: [
+            { left: "$$", right: "$$", display: true },
+            { left: "$", right: "$", display: false },
+            { left: "\\[", right: "\\]", display: true },
+            { left: "\\(", right: "\\)", display: false }
+          ],
+          throwOnError: false
+        });
+      }
+    }
+
+    function shuffle(array) {
+      const arr = [...array];
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    function init() {
+      const url = localStorage.getItem('sb_url');
+      const key = localStorage.getItem('sb_key');
+      if (url && key && window.supabase) {
+        db = window.supabase.createClient(url, key);
+        syncFromCloud();
+      }
+      populateSessionSelect();
+      rebuildRandomizedQueue();
+      resetFeedStream();
+      setupIntersectionObserver();
+      lucide.createIcons();
+    }
+
+    function rebuildRandomizedQueue() {
+      const currentPosts = sessions[activeSessionId] || [];
+      const unmastered = currentPosts.filter(p => !p.mastered);
+      randomizedQueue = shuffle(unmastered);
+      queuePointer = 0;
+    }
+
+    function populateSessionSelect() {
+      const select = document.getElementById('sessionSelect');
+      select.innerHTML = '';
+      const sessionKeys = Object.keys(sessions);
+
+      if (sessionKeys.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = "General";
+        opt.textContent = "Sin materias";
+        select.appendChild(opt);
+        return;
+      }
+
+      sessionKeys.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        opt.selected = (name === activeSessionId);
+        select.appendChild(opt);
+      });
+      document.getElementById('activeSessionTitle').textContent = activeSessionId;
+      updateRemainingCount();
+    }
+
+    function switchSession(name) {
+      activeSessionId = name;
+      localStorage.setItem('active_session_id', activeSessionId);
+      document.getElementById('activeSessionTitle').textContent = activeSessionId;
+      rebuildRandomizedQueue();
+      resetFeedStream();
+    }
+
+    function updateRemainingCount() {
+      const currentPosts = sessions[activeSessionId] || [];
+      const unmastered = currentPosts.filter(p => !p.mastered);
+      document.getElementById('remainingCounter').textContent = unmastered.length;
+    }
+
+    function resetFeedStream() {
+      const feed = document.getElementById('feed');
+      feed.innerHTML = '';
+      appendNextBatch();
+    }
+
+    function appendNextBatch() {
+      const feed = document.getElementById('feed');
+      const currentPosts = sessions[activeSessionId] || [];
+      const unmastered = currentPosts.filter(p => !p.mastered);
+
+      if (unmastered.length === 0) {
+        if (feed.children.length === 0) {
+          feed.innerHTML = `
+            <div class="text-center py-16 space-y-3">
+              <div class="text-4xl">🎉</div>
+              <h3 class="text-lg font-bold text-white">¡Sesión Dominada!</h3>
+              <p class="text-xs text-gray-400">Has comprendido todos los temas de esta sesión.</p>
+              <button onclick="resetSessionMastery()" class="text-xs text-[#ff4500] hover:underline font-semibold">Reiniciar temas para repasar</button>
+            </div>`;
+        }
+        return;
+      }
+
+      for (let i = 0; i < 4; i++) {
+        if (randomizedQueue.length === 0) rebuildRandomizedQueue();
+        const post = randomizedQueue[queuePointer % randomizedQueue.length];
+        queuePointer++;
+        const card = createPostCard(post);
+        feed.appendChild(card);
+        renderLatex(card);
+      }
+      lucide.createIcons();
+    }
+
+    function createPostCard(post) {
+      const card = document.createElement('div');
+      card.className = "reddit-bg border reddit-border rounded-lg p-4 space-y-2.5 cursor-pointer reddit-hover transition relative group";
+      card.setAttribute('data-post-id', post.id);
+
+      card.onclick = (e) => {
+        if (!e.target.closest('.upvote-btn')) {
+          openPostDetail(post.id);
+        }
+      };
+
+      // Si el post no tiene snippet explícito, limpiamos citas del body para la vista previa
+      const previewText = cleanCitations(post.snippet || post.body.substring(0, 120));
+
+      card.innerHTML = `
+        <div class="flex items-center justify-between text-[11px] text-[#818384]">
+          <div class="flex items-center gap-1.5">
+            <span class="font-bold text-gray-300">r/${cleanCitations(post.topic)}</span>
+            <span>•</span>
+            <span>${post.author || 'u/Gemini'}</span>
+          </div>
+          ${post.imageUrl ? '<span class="text-[10px] bg-[#272729] px-2 py-0.5 rounded text-gray-300">📷 Gráfico</span>' : ''}
+        </div>
+
+        <h3 class="text-[15px] font-semibold text-white leading-snug">${cleanCitations(post.title)}</h3>
+        <p class="text-xs text-gray-400 line-clamp-2 leading-relaxed">${previewText}...</p>
+
+        <div class="flex items-center justify-between pt-2.5 border-t reddit-border text-xs text-[#818384]">
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="message-square" class="w-3.5 h-3.5"></i>
+            <span>${post.comments ? post.comments.length : 0} insights</span>
+          </div>
+          <button class="upvote-btn flex items-center gap-1 text-[#818384] hover:text-[#ff4500] transition px-2.5 py-1 rounded hover:bg-[#1f2328]" onclick="masterPost('${post.id}')">
+            <i data-lucide="arrow-big-up" class="w-4 h-4"></i>
+            <span class="font-bold">Entendido</span>
+          </button>
+        </div>
+      `;
+      return card;
+    }
+
+    function setupIntersectionObserver() {
+      const observer = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          appendNextBatch();
+        }
+      }, { rootMargin: '300px' });
+      observer.observe(document.getElementById('sentinel'));
+    }
+
+    function openPostDetail(id) {
+      const post = (sessions[activeSessionId] || []).find(p => p.id === id);
+      if (!post) return;
+
+      document.getElementById('modalSub').textContent = `r/${cleanCitations(post.topic)} • Por ${post.author}`;
+      document.getElementById('modalTitle').textContent = cleanCitations(post.title);
+      document.getElementById('modalBody').innerHTML = formatRichText(post.body);
+      document.getElementById('modalTLDR').innerHTML = `<strong class="text-white block mb-1">TL;DR:</strong> ${cleanCitations(post.keyTakeaway || 'Revisar concepto.')}`;
+
+      // Soporte para imagen si viene en el JSON
+      const imgContainer = document.getElementById('modalImageContainer');
+      const imgElem = document.getElementById('modalImage');
+      const captionElem = document.getElementById('modalImageCaption');
+
+      if (post.imageUrl) {
+        imgElem.src = post.imageUrl;
+        captionElem.textContent = cleanCitations(post.imageCaption || '');
+        imgContainer.classList.remove('hidden');
+      } else {
+        imgContainer.classList.add('hidden');
+      }
+
+      const commentsContainer = document.getElementById('modalComments');
+      commentsContainer.innerHTML = (post.comments || []).map(c => `
+        <div class="border-l-2 border-[#343536] pl-3.5 py-1.5 space-y-1">
+          <div class="flex items-center gap-1.5 text-[11px] text-[#818384]">
+            <span class="font-semibold text-gray-200">${c.author}</span>
+            <span>•</span>
+            <span class="text-[#ff4500] font-bold">▲ ${c.upvotes || 1}</span>
+          </div>
+          <div class="text-xs text-gray-300 leading-relaxed">${formatRichText(c.text)}</div>
+        </div>
+      `).join('');
+
+      document.getElementById('modalUpvoteBtn').onclick = () => {
+        masterPost(post.id);
+        closeModal('postModal');
+      };
+
+      openModal('postModal');
+      lucide.createIcons();
+      renderLatex(document.getElementById('postModal'));
+    }
+
+    function masterPost(id) {
+      const post = (sessions[activeSessionId] || []).find(p => p.id === id);
+      if (post) {
+        post.mastered = true;
+        saveState();
+        updateRemainingCount();
+        rebuildRandomizedQueue();
+
+        document.querySelectorAll(`[data-post-id="${id}"]`).forEach(card => {
+          card.classList.add('opacity-0', 'scale-95');
+          setTimeout(() => card.remove(), 200);
+        });
+      }
+    }
+
+    function resetSessionMastery() {
+      (sessions[activeSessionId] || []).forEach(p => p.mastered = false);
+      saveState();
+      rebuildRandomizedQueue();
+      resetFeedStream();
+      updateRemainingCount();
+    }
+
+    function createSession() {
+      const name = document.getElementById('sessionNameInput').value.trim();
+      let rawJson = document.getElementById('jsonInput').value.trim();
+      if (!name) return alert('Debes escribir un nombre para la sesión');
+
+      if (rawJson.startsWith('```')) {
+        rawJson = rawJson.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+      }
+
+      try {
+        const parsed = JSON.parse(rawJson);
+        if (!Array.isArray(parsed)) throw new Error('El JSON debe ser un array [ ... ]');
+
+        parsed.forEach((item, idx) => {
+          item.id = `${name}-${idx}-${Date.now()}`;
+          item.mastered = false;
+          item.topic = name;
+        });
+
+        sessions[name] = parsed;
+        activeSessionId = name;
+        saveState();
+        populateSessionSelect();
+        rebuildRandomizedQueue();
+        resetFeedStream();
+        closeModal('newSessionModal');
+      } catch (e) {
+        alert('Error en el formato JSON: ' + e.message);
+      }
+    }
+
+    // PROMPT ACTUALIZADO: Sin citas bibliográficas y con soporte de imagen opcional
+    function copyGeminiPrompt() {
+      const prompt = `Actúa como un sintetizador educativo de ingeniería/ciencias. Convierte el material de estudio adjunto en un array de publicaciones estilo Reddit para la materia "${activeSessionId}".
+
+REGLAS CRÍTICAS:
+1. PROHIBIDO incluir citas, notas al pie o referencias tipo "[cite: ...]" o similares. Limpia todo el texto de referencias numéricas.
+2. Toda matemática DEBE estar en LaTeX: '$...$' para expresiones en línea y '$$...$$' en su propia línea para ecuaciones de bloque.
+3. En el body, usa saltos de línea '\\n\\n' entre párrafos y negrita '**término**' para conceptos importantes.
+4. Para preguntas de repaso o desafíos en los comentarios, oculta la solución usando spoilers de Reddit: '>!aquí la respuesta!<'.
+5. Opcional: si el concepto describe una curva o esquema importante y tienes una URL o ruta de imagen, usa el campo "imageUrl" y "imageCaption". De lo contrario, no incluyas el campo.
+6. RESPONDE ÚNICAMENTE CON UN BLOQUE DE CÓDIGO JSON VÁLIDO.
+
+Formato exacto esperado:
+\`\`\`json
+[
+  {
+    "topic": "${activeSessionId}",
+    "title": "¿Título gancho en forma de pregunta?",
+    "author": "u/NombreTematico",
+    "snippet": "Resumen de 1-2 líneas con LaTeX si aplica...",
+    "body": "Explicación clara y detallada.\\n\\n$$\\\\sigma_{max} = \\\\frac{M_f}{W}$$\\n\\nSegundo párrafo explicativo...",
+    "keyTakeaway": "Resumen de una sola línea.",
+    "imageUrl": "https://enlace-opcional-si-existe.png",
+    "imageCaption": "Curva esquemática de deformación vs tiempo",
+    "comments": [
+      {
+        "author": "u/ELI5_Analogy",
+        "text": "Analogía cotidiana sencilla...",
+        "upvotes": 250
+      },
+      {
+        "author": "u/CazadorDeTrampas",
+        "text": "Trampa de examen común y aclaración...",
+        "upvotes": 180
+      },
+      {
+        "author": "u/RepasoActivo",
+        "text": "¿Pregunta de test rápido? >!Respuesta oculta en spoiler!<",
+        "upvotes": 95
+      }
+    ]
+  }
+]
+\`\`\`
+
+Material a procesar:
+[PEGA AQUÍ TUS APUNTES / TEMARIO]`;
+
+      navigator.clipboard.writeText(prompt);
+      alert('¡Prompt copiado! Incluye la orden de no generar citas y soporte de spoilers/fórmulas.');
+    }
+
+    function saveState() {
+      localStorage.setItem('study_sessions', JSON.stringify(sessions));
+      localStorage.setItem('active_session_id', activeSessionId);
+      if (db) syncToCloud();
+    }
+
+    async function syncToCloud() {
+      await db.from('study_app').upsert({ id: 'primary_user_data', payload: sessions });
+    }
+
+    async function syncFromCloud() {
+      const { data } = await db.from('study_app').select('payload').eq('id', 'primary_user_data').single();
+      if (data && data.payload) {
+        sessions = data.payload;
+        populateSessionSelect();
+        rebuildRandomizedQueue();
+        resetFeedStream();
+      }
+    }
+
+    function saveSyncConfig() {
+      const url = document.getElementById('supabaseUrl').value.trim();
+      const key = document.getElementById('supabaseKey').value.trim();
+      localStorage.setItem('sb_url', url);
+      localStorage.setItem('sb_key', key);
+      closeModal('syncModal');
+      location.reload();
+    }
+
+    function clearSyncConfig() {
+      localStorage.removeItem('sb_url');
+      localStorage.removeItem('sb_key');
+      closeModal('syncModal');
+      location.reload();
+    }
+
+    function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+    function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
